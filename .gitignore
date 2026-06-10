@@ -2,6 +2,7 @@
 **/rsconnect/*
 **/.Rhistory/
 **/.DS_Store
+.venv/
 
 *.aux
 *.lof
@@ -23,4 +24,3 @@
 *.synctex.gz
 *.nav
 *.snm
-
