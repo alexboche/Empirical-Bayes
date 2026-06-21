@@ -20,32 +20,66 @@ ccw <- c(
   "ccw_ra_oa_1y", "ccw_stroke_1y", "ccw_ischemic_hd_1y", "ccw_hf_1y"
 )
 
-fml <- as.formula(paste(
-  "~ 0 + card_id + male + race_white + race_black + race_asian + race_hisp",
-  "+ factor(age_bins) + factor(enroll_partd)",
-  "+", paste(paste0("factor(", ccw, ")"), collapse = " + "),
-  "+ hospital_id + admit_year_month + admit_day_week"
-))
+drop_intercept <- function(x) {
+  keep <- colnames(x) != "(Intercept)"
+  x[, keep, drop = FALSE]
+}
 
-A <- sparse.model.matrix(fml, data = d)
+drop_first_level <- function(fml, data) {
+  x <- sparse.model.matrix(fml, data = data)
+  x[, -1, drop = FALSE]
+}
+
+D <- sparse.model.matrix(~ 0 + card_id, data = d)
+
+x_fml <- as.formula(paste(
+  "~ male + race_white + race_black + race_asian + race_hisp",
+  "+ factor(age_bins) + factor(enroll_partd)",
+  "+", paste(paste0("factor(", ccw, ")"), collapse = " + ")
+))
+X <- drop_intercept(sparse.model.matrix(x_fml, data = d))
+
+H <- drop_first_level(~ 0 + hospital_id, d)
+M <- drop_first_level(~ 0 + admit_year_month, d)
+W <- drop_first_level(~ 0 + admit_day_week, d)
+
+A <- cbind(D, X, H, M, W)
 G <- crossprod(A)
 
-doctor_cols <- grep("^card_id", colnames(A))
+doctor_cols <- seq_len(ncol(D))
 batch <- doctor_cols[1:min(100, length(doctor_cols))]
 
 E <- Matrix(0, nrow = ncol(A), ncol = length(batch), sparse = TRUE)
-E[cbind(batch, seq_along(batch))] <- 1
 
-Q <- solve(G, E)
+patient_weight <- as.numeric(table(d$card_id)[levels(d$card_id)])
+patient_weight <- patient_weight / sum(patient_weight)
+
+for (j in seq_along(batch)) {
+  E[doctor_cols, j] <- -patient_weight
+  E[batch[j], j] <- E[batch[j], j] + 1
+}
+
+Q <- tryCatch(
+  solve(G, E),
+  error = function(e) {
+    stop(
+      "Regular-case solve failed. Dropping one hospital, month, and weekday ",
+      "reference was not enough to make the design full rank. Original error: ",
+      conditionMessage(e),
+      call. = FALSE
+    )
+  }
+)
 L <- A %*% Q
 se2 <- colSums((L * L) * as.numeric(d$ehat^2))
 
 out <- data.frame(
   card_col = colnames(A)[batch],
   card_id = sub("^card_id", "", colnames(A)[batch]),
-  se = sqrt(as.numeric(se2))
+  patient_weight = patient_weight[batch],
+  centered_se = sqrt(as.numeric(se2))
 )
 
-write.csv(out, file.path(outdir, "doctor_se_first_batch.csv"), row.names = FALSE)
-print(summary(out$se))
+write.csv(out, file.path(outdir, "doctor_centered_se_first_batch.csv"), row.names = FALSE)
+print(summary(out$centered_se))
 print(head(out))
